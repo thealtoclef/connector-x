@@ -1,5 +1,5 @@
 [project]
-name = "connectorx"
+name = "thealtoclef-connectorx"
 version = "0.4.4-alpha.1"
 description = "Load data from databases to dataframes, the fastest way."
 authors = [{ name = "SFU Database System Lab", email = "dsl.cs.sfu@gmail.com" }]
