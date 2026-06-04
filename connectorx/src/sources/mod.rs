@@ -19,6 +19,8 @@ pub mod oracle;
 pub mod postgres;
 #[cfg(feature = "src_sqlite")]
 pub mod sqlite;
+#[cfg(feature = "src_spanner")]
+pub mod spanner;
 #[cfg(feature = "src_trino")]
 pub mod trino;
 

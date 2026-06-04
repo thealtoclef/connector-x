@@ -5,6 +5,12 @@ use crate::sources::postgres::{
     rewrite_tls_args, BinaryProtocol as PgBinaryProtocol, CSVProtocol, CursorProtocol,
     SimpleProtocol,
 };
+#[cfg(feature = "src_spanner")]
+use crate::sources::spanner::SpannerSource;
+#[cfg(feature = "src_spanner")]
+use crate::transports::spanner_arrow::SpannerArrowTransport;
+#[cfg(feature = "src_spanner")]
+use crate::transports::spanner_arrowstream::SpannerArrowStreamTransport;
 use crate::{
     arrow_batch_iter::{ArrowBatchIter, RecordBatchIterator},
     prelude::*,
@@ -230,6 +236,18 @@ pub fn get_arrow(
             let rt = Arc::new(tokio::runtime::Runtime::new().expect("Failed to create runtime"));
             let source = BigQuerySource::new(rt, &source_conn.conn[..])?;
             let dispatcher = Dispatcher::<_, _, BigQueryArrowTransport>::new(
+                source,
+                &mut destination,
+                queries,
+                origin_query,
+            );
+            dispatcher.run()?;
+        }
+        #[cfg(feature = "src_spanner")]
+        SourceType::Spanner => {
+            let rt = Arc::new(tokio::runtime::Runtime::new().expect("Failed to create runtime"));
+            let source = SpannerSource::new(rt, &source_conn.conn[..])?;
+            let dispatcher = Dispatcher::<_, _, SpannerArrowTransport>::new(
                 source,
                 &mut destination,
                 queries,
@@ -475,6 +493,19 @@ pub fn new_record_batch_iter(
             let rt = Arc::new(tokio::runtime::Runtime::new().expect("Failed to create runtime"));
             let source = BigQuerySource::new(rt, &source_conn.conn[..]).unwrap();
             let batch_iter = ArrowBatchIter::<_, BigQueryArrowStreamTransport>::new(
+                source,
+                destination,
+                origin_query,
+                queries,
+            )
+            .unwrap();
+            return Box::new(batch_iter);
+        }
+        #[cfg(feature = "src_spanner")]
+        SourceType::Spanner => {
+            let rt = Arc::new(tokio::runtime::Runtime::new().expect("Failed to create runtime"));
+            let source = SpannerSource::new(rt, &source_conn.conn[..]).unwrap();
+            let batch_iter = ArrowBatchIter::<_, SpannerArrowStreamTransport>::new(
                 source,
                 destination,
                 origin_query,

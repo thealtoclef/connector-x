@@ -130,6 +130,18 @@ pub enum ConnectorXOutError {
     #[error(transparent)]
     ClickHouseArrowTransportError(#[from] crate::transports::ClickHouseArrowTransportError),
 
+    #[cfg(feature = "src_spanner")]
+    #[error(transparent)]
+    SpannerSourceError(#[from] crate::sources::spanner::SpannerSourceError),
+
+    #[cfg(feature = "src_spanner")]
+    #[error(transparent)]
+    SpannerError(#[from] google_cloud_spanner::Error),
+
+    #[cfg(all(feature = "src_spanner", feature = "dst_arrow"))]
+    #[error(transparent)]
+    SpannerArrowTransportError(#[from] crate::transports::SpannerArrowTransportError),
+
     /// Any other errors that are too trivial to be put here explicitly.
     #[error(transparent)]
     Other(#[from] anyhow::Error),

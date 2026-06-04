@@ -18,6 +18,7 @@ pub enum SourceType {
     DuckDB,
     Trino,
     ClickHouse,
+    Spanner,
     Unknown,
 }
 
@@ -70,6 +71,7 @@ impl TryFrom<&str> for SourceConn {
             "duckdb" => Ok(SourceConn::new(SourceType::DuckDB, url, proto)),
             "trino" => Ok(SourceConn::new(SourceType::Trino, url, proto)),
             "clickhouse" => Ok(SourceConn::new(SourceType::ClickHouse, url, proto)),
+            "spanner" => Ok(SourceConn::new(SourceType::Spanner, url, proto)),
             _ => Ok(SourceConn::new(SourceType::Unknown, url, proto)),
         }
     }

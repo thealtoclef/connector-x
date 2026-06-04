@@ -62,7 +62,7 @@ rusqlite = { version = "0.37", features = [
   "chrono",
   "bundled",
 ], optional = true }
-rust_decimal = { version = "1", features = ["db-postgres"], optional = true }
+rust_decimal = { version = "1.42", features = ["db-postgres"], optional = true }
 rust_decimal_macros = { version = "1", optional = true }
 tiberius = { version = "0.7", features = [
   "rust_decimal",
@@ -90,6 +90,8 @@ pgvector = { version = "0.4", features = [
 ], optional = true }
 chrono-tz = { version = "0.10.4", optional = true }
 rustc-hash = { version = "2.1.1", optional = true }
+google-cloud-spanner = { git = "https://github.com/googleapis/google-cloud-rust", optional = true }
+time = { version = "0.3", optional = true }
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -102,6 +104,7 @@ iai = "0.1"
 pprof = { version = "0.14", features = ["flamegraph"] }
 testcontainers = { version = "0.23", features = ["blocking"] }
 ureq = { version = "2", features = ["json"] }
+google-cloud-lro = { git = "https://github.com/googleapis/google-cloud-rust" }
 
 [features]
 all = [
@@ -115,6 +118,7 @@ all = [
   "src_dummy",
   "src_trino",
   "src_clickhouse",
+  "src_spanner",
   "dst_arrow",
   "dst_polars",
   "federation",
@@ -187,6 +191,7 @@ src_clickhouse = [
   "regex",
   "rustc-hash",
 ]
+src_spanner = ["google-cloud-spanner", "tokio", "time"]
 federation = ["j4rs"]
 fed_exec = ["datafusion", "tokio"]
 integrated-auth-gssapi = ["tiberius/integrated-auth-gssapi"]

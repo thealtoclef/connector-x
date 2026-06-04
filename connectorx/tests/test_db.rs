@@ -19,6 +19,7 @@ static MSSQL_INIT: Once = Once::new();
 static TRINO_INIT: Once = Once::new();
 static CLICKHOUSE_INIT: Once = Once::new();
 static ORACLE_INIT: Once = Once::new();
+static SPANNER_INIT: Once = Once::new();
 
 fn scripts_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts")
@@ -394,4 +395,180 @@ EXIT;\n"
     });
 
     env::var("ORACLE_URL").expect("ORACLE_URL must be set")
+}
+
+#[cfg(feature = "src_spanner")]
+pub fn spanner_url() -> String {
+    SPANNER_INIT.call_once(|| {
+        if env::var("SPANNER_URL").is_ok() {
+            // URL already set, setup test data
+            let dburl = env::var("SPANNER_URL").unwrap();
+            setup_spanner_test_data(&dburl);
+            return;
+        }
+
+        // If no URL set, we can't proceed
+        panic!("SPANNER_URL environment variable must be set for Spanner tests");
+    });
+
+    env::var("SPANNER_URL").expect("SPANNER_URL must be set")
+}
+
+#[cfg(feature = "src_spanner")]
+const SPANNER_DROP_DDL: &[&str] = &[
+    "DROP TABLE IF EXISTS test_table",
+    "DROP TABLE IF EXISTS test_types",
+    "DROP TABLE IF EXISTS test_str",
+];
+
+#[cfg(feature = "src_spanner")]
+fn spanner_drop_tables(database_path: &str) {
+    use google_cloud_lro::Poller;
+    use google_cloud_spanner::client::Spanner;
+    use tokio::runtime::Runtime;
+
+    let rt = Runtime::new().unwrap();
+    let spanner = rt.block_on(Spanner::builder().build())
+        .expect("Failed to create Spanner client");
+    let admin_client = rt.block_on(spanner.database_admin_builder().build())
+        .expect("Failed to create DatabaseAdmin client");
+
+    let stmts: Vec<String> = SPANNER_DROP_DDL.iter().map(|s| s.to_string()).collect();
+    let result = rt.block_on(
+        admin_client.update_database_ddl()
+            .set_database(database_path)
+            .set_statements(stmts)
+            .poller()
+            .until_done()
+    );
+    match result {
+        Ok(_) => println!("Spanner teardown: tables dropped"),
+        Err(e) => println!("Spanner teardown failed: {}", e),
+    }
+}
+
+#[cfg(feature = "src_spanner")]
+fn spanner_database_path(dburl: &str) -> String {
+    let url = url::Url::parse(dburl).expect("Failed to parse Spanner URL");
+    format!("{}{}", url.host_str().unwrap_or(""), url.path())
+}
+
+#[cfg(feature = "src_spanner")]
+extern "C" fn spanner_atexit() {
+    if let Ok(dburl) = env::var("SPANNER_URL") {
+        let database_path = spanner_database_path(&dburl);
+        spanner_drop_tables(&database_path);
+    }
+}
+
+#[cfg(feature = "src_spanner")]
+fn setup_spanner_test_data(dburl: &str) {
+    use google_cloud_lro::Poller;
+    use google_cloud_spanner::client::Spanner;
+    use google_cloud_spanner::statement::Statement;
+    use std::sync::Arc;
+    use tokio::runtime::Runtime;
+
+    let rt = Arc::new(Runtime::new().unwrap());
+    let database_path = spanner_database_path(dburl);
+
+    let spanner = rt.block_on(Spanner::builder().build())
+        .expect("Failed to create Spanner client");
+    let admin_client = rt.block_on(spanner.database_admin_builder().build())
+        .expect("Failed to create DatabaseAdmin client");
+    let db_client = rt.block_on(spanner.database_client(&database_path).build())
+        .expect("Failed to create DatabaseClient");
+
+    // Drop tables from any previous run
+    let stmts: Vec<String> = SPANNER_DROP_DDL.iter().map(|s| s.to_string()).collect();
+    let result = rt.block_on(
+        admin_client.update_database_ddl()
+            .set_database(&database_path)
+            .set_statements(stmts)
+            .poller()
+            .until_done()
+    );
+    match result {
+        Ok(_) => println!("DDL drop executed"),
+        Err(e) => println!("DDL drop failed (may be expected): {}", e),
+    }
+
+    let create_ddl = vec![
+        "CREATE TABLE test_table (
+            test_int INT64 NOT NULL,
+            test_nullint INT64,
+            test_str STRING(100),
+            test_float FLOAT64,
+            test_bool BOOL
+        ) PRIMARY KEY (test_int)".to_string(),
+        "CREATE TABLE test_types (
+            test_bool BOOL,
+            test_date DATE,
+            test_timestamp TIMESTAMP,
+            test_int INT64,
+            test_float FLOAT64,
+            test_numeric NUMERIC,
+            test_str STRING(100),
+            test_bytes BYTES(MAX),
+            test_json JSON
+        ) PRIMARY KEY (test_int)".to_string(),
+        "CREATE TABLE test_str (
+            id INT64 NOT NULL,
+            test_language STRING(50),
+            test_hello STRING(100)
+        ) PRIMARY KEY (id)".to_string(),
+    ];
+    rt.block_on(
+        admin_client.update_database_ddl()
+            .set_database(&database_path)
+            .set_statements(create_ddl)
+            .poller()
+            .until_done()
+    ).expect("Failed to create tables via DDL");
+    println!("DDL create executed");
+
+    // Register teardown for process exit
+    extern "C" { fn atexit(f: extern "C" fn()) -> i32; }
+    unsafe { atexit(spanner_atexit); }
+
+    // DML: insert test data (via read-write transactions)
+    let dml_statements = vec![
+        "INSERT INTO test_table (test_int, test_nullint, test_str, test_float, test_bool) VALUES (1, 3, 'str1', NULL, TRUE)",
+        "INSERT INTO test_table (test_int, test_nullint, test_str, test_float, test_bool) VALUES (2, NULL, 'str2', 2.2, FALSE)",
+        "INSERT INTO test_table (test_int, test_nullint, test_str, test_float, test_bool) VALUES (0, 5, 'a', 3.1, NULL)",
+        "INSERT INTO test_table (test_int, test_nullint, test_str, test_float, test_bool) VALUES (3, 7, 'b', 3.0, FALSE)",
+        "INSERT INTO test_table (test_int, test_nullint, test_str, test_float, test_bool) VALUES (4, 9, 'c', 7.8, NULL)",
+        "INSERT INTO test_table (test_int, test_nullint, test_str, test_float, test_bool) VALUES (1314, 2, NULL, -10.0, TRUE)",
+        "INSERT INTO test_types (test_bool, test_date, test_timestamp, test_int, test_float, test_numeric, test_str, test_bytes, test_json) VALUES (TRUE, '1937-01-28', '1970-01-01T00:00:01Z', 1, 1.23, 1.23, '😁😂😜', B'\\x01\\x02\\x03', JSON '{\"key\": \"value\"}')",
+        "INSERT INTO test_types (test_bool, test_date, test_timestamp, test_int, test_float, test_numeric, test_str, test_bytes, test_json) VALUES (NULL, '2053-07-25', NULL, 2, 234.56, 234.56, 'こんにちはЗдра́в', B'\\x04\\x05\\x06', NULL)",
+        "INSERT INTO test_types (test_bool, test_date, test_timestamp, test_int, test_float, test_numeric, test_str, test_bytes, test_json) VALUES (FALSE, NULL, '2004-02-29T12:00:01.30Z', 3, NULL, NULL, NULL, NULL, JSON '[1, 2, 3]')",
+        "INSERT INTO test_str (id, test_language, test_hello) VALUES (0, 'English', 'Hello')",
+        "INSERT INTO test_str (id, test_language, test_hello) VALUES (1, '中文', '你好')",
+        "INSERT INTO test_str (id, test_language, test_hello) VALUES (2, '日本語', 'こんにちは')",
+        "INSERT INTO test_str (id, test_language, test_hello) VALUES (3, 'русский', 'Здра́вствуйте')",
+        "INSERT INTO test_str (id, test_language, test_hello) VALUES (4, 'Emoji', '😁😂😜')",
+        "INSERT INTO test_str (id, test_language, test_hello) VALUES (5, 'Latin1', '¥§¤®ð')",
+        "INSERT INTO test_str (id, test_language, test_hello) VALUES (6, 'Extra', 'y̆')",
+        "INSERT INTO test_str (id, test_language, test_hello) VALUES (7, 'Mixed', 'Ha好ち😁ðy̆')",
+        "INSERT INTO test_str (id, test_language, test_hello) VALUES (8, '', NULL)",
+    ];
+
+    for stmt in dml_statements {
+        let statement = Statement::builder(stmt).build();
+        let result = rt.block_on(async {
+            let runner = db_client.read_write_transaction().build().await?;
+            runner.run(|tx: google_cloud_spanner::transaction::ReadWriteTransaction| {
+                let statement = statement.clone();
+                async move {
+                    tx.execute_update(statement).await
+                }
+            }).await
+        });
+        match result {
+            Ok(_) => println!("DML executed: {}", stmt),
+            Err(e) => println!("DML failed: {} - {}", stmt, e),
+        }
+    }
+
+    println!("Spanner test data setup complete");
 }
