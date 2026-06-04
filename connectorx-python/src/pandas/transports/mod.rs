@@ -4,6 +4,7 @@ mod mssql;
 mod mysql;
 mod oracle;
 mod postgres;
+mod spanner;
 mod sqlite;
 mod trino;
 
@@ -13,5 +14,6 @@ pub use clickhouse::ClickHousePandasTransport;
 pub use mssql::MsSQLPandasTransport;
 pub use mysql::MysqlPandasTransport;
 pub use oracle::OraclePandasTransport;
+pub use spanner::SpannerPandasTransport;
 pub use sqlite::SqlitePandasTransport;
 pub use trino::TrinoPandasTransport;

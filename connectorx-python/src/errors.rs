@@ -51,6 +51,9 @@ pub enum ConnectorXPythonError {
     #[error(transparent)]
     ClickHouseSourceError(#[from] connectorx::sources::clickhouse::ClickHouseSourceError),
 
+    #[error(transparent)]
+    SpannerSourceError(#[from] connectorx::sources::spanner::SpannerSourceError),
+
     /// Any other errors that are too trivial to be put here explicitly.
     #[error(transparent)]
     Other(#[from] anyhow::Error),

@@ -10,13 +10,15 @@ pub use self::destination::{PandasBlockInfo, PandasDestination, PandasPartitionD
 use self::dispatcher::PandasDispatcher;
 pub use self::transports::{
     BigQueryPandasTransport, ClickHousePandasTransport, MsSQLPandasTransport, MysqlPandasTransport,
-    OraclePandasTransport, PostgresPandasTransport, SqlitePandasTransport, TrinoPandasTransport,
+    OraclePandasTransport, PostgresPandasTransport, SpannerPandasTransport, SqlitePandasTransport,
+    TrinoPandasTransport,
 };
 pub use self::typesystem::{PandasDType, PandasTypeSystem};
 use crate::errors::ConnectorXPythonError;
 use connectorx::source_router::{SourceConn, SourceType};
 use connectorx::sources::clickhouse::ClickHouseSource;
 use connectorx::sources::oracle::OracleSource;
+use connectorx::sources::spanner::SpannerSource;
 use connectorx::{
     prelude::*,
     sources::{
@@ -249,6 +251,17 @@ pub fn write_pandas<'a, 'py: 'a>(
             let rt = Arc::new(tokio::runtime::Runtime::new().expect("Failed to create runtime"));
             let source = ClickHouseSource::new(rt, &source_conn.conn[..])?;
             let dispatcher = PandasDispatcher::<ClickHouseSource, ClickHousePandasTransport>::new(
+                source,
+                destination,
+                queries,
+                origin_query,
+            );
+            dispatcher.run(py)?
+        }
+        SourceType::Spanner => {
+            let rt = Arc::new(tokio::runtime::Runtime::new().expect("Failed to create runtime"));
+            let source = SpannerSource::new(rt, &source_conn.conn[..])?;
+            let dispatcher = PandasDispatcher::<_, SpannerPandasTransport>::new(
                 source,
                 destination,
                 queries,

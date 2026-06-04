@@ -24,7 +24,7 @@ itertools = "0.14"
 lazy_static = "1.4"
 libc = "0.2"
 log = "0.4"
-ndarray = "0.16"
+ndarray = "0.17"
 numpy = {version = "0.27"}
 openssl = {version = "0.10", features = ["vendored"]}
 postgres = {version = "0.19", features = ["with-chrono-0_4", "with-uuid-1", "with-serde_json-1"]}
@@ -80,5 +80,6 @@ srcs = [
   "connectorx/src_bigquery",
   "connectorx/src_trino",
   "connectorx/src_clickhouse",
+  "connectorx/src_spanner",
 ]
 integrated-auth-gssapi = ["connectorx/integrated-auth-gssapi"]
