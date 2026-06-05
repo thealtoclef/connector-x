@@ -136,6 +136,47 @@ fn test_spanner_data_boost_parameter() {
 }
 
 #[test]
+fn test_spanner_partition_query_parameter() {
+    let rt = Arc::new(Runtime::new().unwrap());
+
+    // Test with partition_query=true (default behavior)
+    let result = SpannerSource::new(
+        rt.clone(),
+        "spanner://projects/p/instances/i/databases/d?partition_query=true",
+    );
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(!err.contains("URL"), "Unexpected URL error: {}", err);
+
+    // Test with partition_query=false (single_use mode)
+    let result = SpannerSource::new(
+        rt.clone(),
+        "spanner://projects/p/instances/i/databases/d?partition_query=false",
+    );
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(!err.contains("URL"), "Unexpected URL error: {}", err);
+
+    // Test without partition_query parameter (should default to true)
+    let result = SpannerSource::new(
+        rt.clone(),
+        "spanner://projects/p/instances/i/databases/d",
+    );
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(!err.contains("URL"), "Unexpected URL error: {}", err);
+
+    // Test combined with data_boost
+    let result = SpannerSource::new(
+        rt.clone(),
+        "spanner://projects/p/instances/i/databases/d?data_boost=true&partition_query=false",
+    );
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(!err.contains("URL"), "Unexpected URL error: {}", err);
+}
+
+#[test]
 fn test_spanner_source_creation() {
     let rt = Arc::new(Runtime::new().unwrap());
     
@@ -445,4 +486,31 @@ fn test_spanner_string_types() {
 
     let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
     assert_eq!(total_rows, 9);
+}
+
+#[test]
+#[ignore]
+fn test_spanner_partition_query_false_aggregate() {
+    // Aggregate queries are not root partitionable and require partition_query=false
+    let dburl = test_db::spanner_url();
+    let rt = Arc::new(Runtime::new().unwrap());
+    let source = SpannerSource::new(
+        rt,
+        &format!("{}?partition_query=false", dburl),
+    ).unwrap();
+
+    let queries = [CXQuery::naked(
+        "SELECT MIN(`test_int`), MAX(`test_int`) FROM test_table WHERE `test_int` IS NOT NULL"
+    )];
+    let mut destination = ArrowDestination::new();
+    let dispatcher =
+        Dispatcher::<_, _, SpannerArrowTransport>::new(source, &mut destination, &queries, None);
+    dispatcher.run().unwrap();
+    let result = destination.arrow().unwrap();
+    assert!(!result.is_empty());
+
+    // Aggregate returns exactly one row
+    let batch = &result[0];
+    assert_eq!(batch.num_rows(), 1);
+    assert_eq!(batch.num_columns(), 2);
 }

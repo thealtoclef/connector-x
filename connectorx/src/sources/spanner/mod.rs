@@ -52,6 +52,7 @@ pub struct SpannerSource {
     names: Vec<String>,
     schema: Vec<SpannerTypeSystem>,
     data_boost: bool,
+    partition_query: bool,
 }
 
 impl SpannerSource {
@@ -75,6 +76,15 @@ impl SpannerSource {
             .map(|(_, v)| v == "true")
             .unwrap_or(false);
 
+        // Check for partition_query query parameter
+        // When false, skip partition_query() and use single_use() + execute_query() instead.
+        // This is needed for non-root-partitionable queries (e.g. aggregates).
+        let partition_query = url
+            .query_pairs()
+            .find(|(k, _)| k == "partition_query")
+            .map(|(_, v)| v != "false")
+            .unwrap_or(true);
+
         // Create Spanner client and DatabaseClient
         let spanner = rt.block_on(Spanner::builder().build())
             .map_err(|e| anyhow::anyhow!("Failed to create Spanner client: {}", e))?;
@@ -92,6 +102,7 @@ impl SpannerSource {
             names: vec![],
             schema: vec![],
             data_boost,
+            partition_query,
         }
     }
 }
@@ -182,40 +193,55 @@ where
 
     #[throws(SpannerSourceError)]
     fn partition(self) -> Vec<Self::Partition> {
-        // Always use batch_read_only_transaction + partition_query
-        // Spanner automatically determines optimal partitions based on data size
-        let read_tx = self.rt.block_on(
-            self.db_client.batch_read_only_transaction().build()
-        )?;
+        if self.partition_query {
+            // batch_read_only_transaction + partition_query (parallel)
+            let read_tx = self.rt.block_on(
+                self.db_client.batch_read_only_transaction().build()
+            )?;
 
-        let stmt = Statement::builder(self.queries[0].as_str()).build();
+            let stmt = Statement::builder(self.queries[0].as_str()).build();
 
-        let partitions = self.rt.block_on(
-            read_tx.partition_query(stmt, PartitionOptions::default())
-        )?;
+            let partitions = self.rt.block_on(
+                read_tx.partition_query(stmt, PartitionOptions::default())
+            )?;
 
-        debug!("Spanner returned {} partitions", partitions.len());
+            debug!("Spanner returned {} partitions", partitions.len());
 
-        // Create a SourcePartition for each Spanner partition
-        partitions
-            .into_iter()
-            .map(|p| {
-                SpannerSourcePartition::new(
-                    self.rt.clone(),
-                    self.db_client.clone(),
-                    p,
-                    &self.schema,
-                    self.data_boost,
-                )
-            })
-            .collect()
+            partitions
+                .into_iter()
+                .map(|p| {
+                    SpannerSourcePartition::new(
+                        self.rt.clone(),
+                        self.db_client.clone(),
+                        p,
+                        &self.schema,
+                        self.data_boost,
+                    )
+                })
+                .collect()
+        } else {
+            // single_use + execute_query for non-root-partitionable queries (e.g. aggregates)
+            debug!("partition_query=false, using single_use transaction");
+            vec![SpannerSourcePartition::new_single(
+                self.rt.clone(),
+                self.db_client.clone(),
+                self.queries[0].as_str().to_string(),
+                &self.schema,
+                self.data_boost,
+            )]
+        }
     }
+}
+
+enum PartitionSource {
+    Partition(google_cloud_spanner::batch::Partition),
+    Query(String),
 }
 
 pub struct SpannerSourcePartition {
     rt: Arc<Runtime>,
     db_client: DatabaseClient,
-    partition: google_cloud_spanner::batch::Partition,
+    source: PartitionSource,
     schema: Vec<SpannerTypeSystem>,
     nrows: usize,
     ncols: usize,
@@ -233,7 +259,25 @@ impl SpannerSourcePartition {
         Self {
             rt,
             db_client,
-            partition,
+            source: PartitionSource::Partition(partition),
+            schema: schema.to_vec(),
+            nrows: 0,
+            ncols: schema.len(),
+            data_boost,
+        }
+    }
+
+    pub fn new_single(
+        rt: Arc<Runtime>,
+        db_client: DatabaseClient,
+        query: String,
+        schema: &[SpannerTypeSystem],
+        data_boost: bool,
+    ) -> Self {
+        Self {
+            rt,
+            db_client,
+            source: PartitionSource::Query(query),
             schema: schema.to_vec(),
             nrows: 0,
             ncols: schema.len(),
@@ -256,12 +300,22 @@ impl SourcePartition for SpannerSourcePartition {
 
     #[throws(SpannerSourceError)]
     fn parser(&mut self) -> Self::Parser<'_> {
-        debug!("Executing Spanner partition (data_boost={})", self.data_boost);
-        let mut p = self.partition.clone();
-        if self.data_boost {
-            p = p.set_data_boost(true);
-        }
-        let mut rs = self.rt.block_on(p.execute(&self.db_client))?;
+        let mut rs = match &self.source {
+            PartitionSource::Partition(p) => {
+                debug!("Executing Spanner partition (data_boost={})", self.data_boost);
+                let mut p = p.clone();
+                if self.data_boost {
+                    p = p.set_data_boost(true);
+                }
+                self.rt.block_on(p.execute(&self.db_client))?
+            }
+            PartitionSource::Query(q) => {
+                debug!("Executing Spanner single_use query");
+                let tx = self.db_client.single_use().build();
+                let stmt = Statement::builder(q.as_str()).build();
+                self.rt.block_on(tx.execute_query(stmt))?
+            }
+        };
 
         // Buffer all rows (same pattern as BigQuery)
         let mut rows = Vec::new();
